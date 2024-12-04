@@ -1,0 +1,267 @@
+from kivy.app import App
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.label import Label
+from kivy.clock import Clock
+from datetime import datetime, timedelta
+import pytz
+from kivy.uix.gridlayout import GridLayout
+from kivy.uix.textinput import TextInput
+from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.spinner import Spinner
+from kivy.graphics import Rectangle
+from kivy.core.window import Window
+import json
+import os
+from kivy.uix.popup import Popup
+
+Window.clearcolor = (150 / 210, 150 / 255, 250 / 100, 1)
+#criacao da tela de anotaça
+class NotesScreen(Screen):
+    def save_note(self, instance):
+        time = self.time_spinner.text
+        note = self.note_input.text
+        day = self.day_label.text.split()[3]
+        if day not in self.manager.get_screen('calendar').reminders:
+            self.manager.get_screen('calendar').reminders[day] = []
+        self.manager.get_screen('calendar').reminders[day].append((time, note))
+        self.manager.get_screen('calendar').populate_calendar()
+        self.manager.get_screen('calendar').update_reminder_label()
+        self.save_reminders()
+        self.note_input.text = ""
+        self.time_spinner.text = 'Selecione o horário'
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        self.day_label = Label(text="", font_size='24sp', size_hint_y=0.1 ,)
+        self.layout.add_widget(self.day_label)
+        self.time_spinner = Spinner(
+            text='Selecione o horário',
+            background_color=(2, 2, 17, 1),
+            color=(0, 0, 0, 1),
+            values=self.generate_time_slots(),
+            size_hint_y=0.1
+        )
+        self.layout.add_widget(self.time_spinner)
+        self.note_input = TextInput(hint_text="Digite sua anotação aqui", multiline=True, size_hint_y=0.5)
+        self.layout.add_widget(self.note_input)
+        button_layout = BoxLayout(size_hint_y=0.2, spacing=10)
+        save_button = Button(text="Salvar Lembrete", size_hint_x=0.5 ,background_color=(2, 2, 17, 1),color=(0, 0, 0, 1))
+        save_button.bind(on_press=self.save_note)
+        button_layout.add_widget(save_button)
+        back_button = Button(text="Voltar ao Calendário", size_hint_x=0.5 ,background_color=(2, 2, 17, 1),color=(0, 0, 0, 1))
+        back_button.bind(on_press=self.go_back)
+        button_layout.add_widget(back_button)
+        self.layout.add_widget(button_layout)
+        self.reminders_list = ScrollView(size_hint_y=0.2)
+        self.reminders_container = BoxLayout(orientation='vertical', size_hint_y=None)
+        self.reminders_container.bind(minimum_height=self.reminders_container.setter('height'))
+        self.reminders_list.add_widget(self.reminders_container)
+        self.layout.add_widget(self.reminders_list)
+        self.add_widget(self.layout)
+    def on_pre_enter(self):
+        self.load_reminders()
+    def generate_time_slots(self):
+        time_slots = []
+        for hour in range(24):
+            for minute in [0, 30]:
+                time_slots.append(f"{hour:02}:{minute:02}")
+        return time_slots
+
+
+    def set_day(self, day, existing_reminders):
+        self.day_label.text = f"Lembretes para o dia {day}"
+        self.reminders_container.clear_widgets()
+        for time, note in existing_reminders:
+            reminder_label = BoxLayout(size_hint_y=None, height=30)
+            reminder_label.add_widget(Label(text=f"{time}: {note}"))
+            delete_button = Button(text="Deletar", size_hint_x=0.3)
+            delete_button.bind(on_press=lambda instance, d=day, t=time: self.delete_reminder(d, t))
+            reminder_label.add_widget(delete_button)
+            self.reminders_container.add_widget(reminder_label)
+
+
+    def go_back(self, instance):
+        self.manager.current = 'calendar'
+    def load_reminders(self):
+        if os.path.exists('reminders.json'):
+            with open('reminders.json', 'r') as file:
+                if self.manager:
+                    self.manager.get_screen('calendar').reminders = json.load(file)
+
+    def save_reminders(self):
+        if self.manager:
+            with open('reminders.json', 'w') as file:
+                json.dump(self.manager.get_screen('calendar').reminders, file)
+
+    def delete_reminder(self, day, time):
+        reminders = self.manager.get_screen('calendar').reminders.get(day, [])
+        reminders = [(t, note) for t, note in reminders if t != time]
+        self.manager.get_screen('calendar').reminders[day] = reminders
+        self.set_day(day, reminders)
+        self.save_reminders()
+
+ # principal tela e construcao do calendario
+class Calendar(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.reminders = {}
+        self.load_reminders()
+        self.layout = BoxLayout(orientation='vertical')
+        self.header = BoxLayout(size_hint_y=0.2)
+        self.prev_button = Button(text="< Mês Anterior", size_hint_x=0.3 ,background_color=(2, 2, 17, 1),color=(0, 0, 0, 1))
+        self.prev_button.bind(on_press=self.previous_month)
+        self.next_button = Button(text="Próximo Mês >", size_hint_x=0.3 ,background_color=(2, 2, 17, 1),color=(0, 0, 0, 1))
+        self.next_button.bind(on_press=self.next_month)
+        self.month_label = Label(text="", font_size='20sp', size_hint_x=0.4, halign='center' ,color=(0, 0, 0, 1))
+        self.header.add_widget(self.prev_button)
+        self.header.add_widget(self.month_label)
+        self.header.add_widget(self.next_button)
+        self.layout.add_widget(self.header)
+        self.grid = GridLayout(cols=7, spacing=5, size_hint_y=1)
+        self.grid.bind(minimum_height=self.grid.setter('height'))
+        self.layout.add_widget(self.grid)
+        self.footer = BoxLayout(size_hint_y=0.1)
+        self.reminder_button = Button(text="Lembretes: 0", font_size='14sp', size_hint_x=0.5, color=(0, 0, 0, 1),background_color=(2, 2, 17, 1))
+        self.reminder_button.bind(on_press=self.show_reminders)
+        self.footer.add_widget(self.reminder_button)
+        self.layout.add_widget(self.footer)
+        self.current_month = datetime.now(pytz.timezone("America/Sao_Paulo")).month
+        self.current_year = datetime.now(pytz.timezone("America/Sao_Paulo")).year
+        self.populate_calendar()
+        self.add_widget(self.layout)
+        self.time_label = Label(font_size='24sp', size_hint_y=0.1 ,color=(0, 0, 0, 1))
+        self.layout.add_widget(self.time_label)
+        Clock.schedule_interval(self.update_time, 1)
+
+    def delete_reminder(self, day, time):
+        if day in self.reminders:
+            self.reminders[day] = [(t, note) for t, note in self.reminders[day] if t != time]
+            self.populate_calendar()
+            self.save_reminders()
+
+    def save_reminders(self):
+        with open('reminders.json', 'w') as file:
+            json.dump(self.reminders, file)
+
+    def populate_calendar(self):
+        self.grid.clear_widgets()
+        self.month_label.text = datetime(self.current_year, self.current_month, 1).strftime("%B %Y")
+        self.update_reminder_label()
+        weekdays = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"]
+
+        for day in weekdays:
+            self.grid.add_widget \
+                (Label(text=day, font_size='16sp', color=(0, 0, 0, 1), bold=True, halign='center' ,size_hint_y=1))
+        first_day = datetime(self.current_year, self.current_month, 1)
+        first_weekday = (first_day.weekday() + 1) % 7
+
+        for _ in range(first_weekday):
+            self.grid.add_widget(Label(text="", font_size='16sp'))
+        last_day = (first_day + timedelta(days=31)).replace(day=1) - timedelta(days=1)
+        for day in range(1, last_day.day + 1):
+            day_button = Button(text=str(day), background_color=(2, 2, 17, 1) ,color=(0, 0, 0, 1), size_hint_y=0.9,height=0.1)
+            if str(day) in self.reminders and self.reminders[str(day)]:
+                reminder_count = len(self.reminders[str(day)])
+                day_button.text = f"{day}\n({reminder_count} lembretes)"
+            else:
+                day_button.text = str(day)
+            day_button.bind(on_press=self.open_note_screen)
+            self.grid.add_widget(day_button)
+
+    def update_time(self, *args):
+        timezone = pytz.timezone("America/Sao_Paulo")
+        now = datetime.now(timezone)
+        self.time_label.text = now.strftime("%H:%M:%S")
+
+    # faz a contagem dea quantidade de lembretes
+    def update_reminder_label(self):
+        reminder_count = 0
+        days_with_reminders = []
+
+        for day, reminders in self.reminders.items():
+            reminder_count += len(reminders)
+            if reminders:
+                days_with_reminders.append(day)
+
+        if reminder_count > 0:
+            days_text = ', '.join(days_with_reminders)
+            self.reminder_button.text = f"Lembretes: {reminder_count} "
+        else:
+            self.reminder_button.text = f"Lembretes: {reminder_count}"
+
+    def show_reminders(self, instance):
+        content = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        scroll = ScrollView()
+        reminders_layout = BoxLayout(orientation='vertical', size_hint_y=0.3 ,)
+        reminders_layout.bind(minimum_height=reminders_layout.setter('height'))
+
+        for day , reminders in self.reminders.items():
+            day_label = Label(text=f"\nLembretes para os dias :", font_size='18sp', bold=True ,color=(1 ,1 ,1, 1))
+            reminders_layout.add_widget(day_label)
+
+            for time, note in reminders:
+                reminder_label = BoxLayout(size_hint_y=0.3 ,height=60, spacing=0)
+                reminder_label.add_widget(Label(text=f"{time} - {note}", font_size='16sp' ,color=(1 ,1 ,1, 1)))
+                delete_button = Button(text="Excluir" ,size_hint_y=0.9, size_hint_x=0.8 ,background_color=(2, 2, 17, 1),color=(0 ,0 ,0, 1))
+                delete_button.bind(on_press=lambda instance, day=day, time=time: self.delete_reminder(day, time))
+                reminder_label.add_widget(delete_button)
+                reminders_layout.add_widget(reminder_label)
+
+        scroll.add_widget(reminders_layout)
+        content.add_widget(scroll)
+        close_button = Button(text="Fechar", size_hint_y=0.1, height=50 ,background_color=(2, 2, 17, 1),color=(0, 0, 0, 1))
+        reminder_popup = Popup(
+            title="Todos os Lembretes" ,background_color=(1.8, 1.5, 2.5, 1),
+            content=content,
+            size_hint=(1, 1),
+            auto_dismiss=False
+        )
+        close_button.bind(on_press=lambda instance: reminder_popup.dismiss())
+        content.add_widget(close_button)
+        reminder_popup.open()
+
+
+    def close_reminders_popup(self, instance):
+        popup = instance.parent.parent
+        popup.dismiss()
+
+    def open_note_screen(self, instance):
+        day = instance.text.split()[0]
+        self.manager.current = 'notes'
+        self.manager.get_screen('notes').set_day(day,self.reminders.get(day, []))
+
+
+    def previous_month(self, instance):
+        if self.current_month == 1:
+            self.current_month = 12
+            self.current_year -= 1
+        else:
+            self.current_month -= 1
+        self.populate_calendar()
+
+    def next_month(self, instance):
+        if self.current_month == 12:
+            self.current_month = 1
+            self.current_year += 1
+        else:
+            self.current_month += 1
+        self.populate_calendar()
+
+    def load_reminders(self):
+        try:
+            with open('reminders.json', 'r') as file:
+                self.reminders = json.load(file)
+        except FileNotFoundError:
+            self.reminders = {}
+
+class MainApp(App):
+    def build(self):
+        sm = ScreenManager()
+        sm.add_widget(Calendar(name='calendar'))
+        sm.add_widget(NotesScreen(name='notes'))
+        return sm
+
+if __name__ == '__main__':
+    MainApp().run()
